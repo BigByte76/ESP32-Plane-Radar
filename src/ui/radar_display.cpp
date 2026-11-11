@@ -15,6 +15,7 @@
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
 #include "ui/runway_overlay.h"
+#include "ui/side_panel.h"
 
 namespace ui {
 namespace radar {
@@ -78,7 +79,7 @@ int measureVlwHeight(float size) {
 
 float findVlwSizeForHeight(int target_px) {
   float lo = 0.25f;
-  float hi = 1.2f;
+  float hi = radar::kVlwMaxScale;
   for (int i = 0; i < 16; ++i) {
     const float mid = (lo + hi) * 0.5f;
     if (measureVlwHeight(mid) < target_px) {
@@ -178,7 +179,8 @@ void initPalette() {
   radar::kColorGrid = tft.color565(radar::kGridR, radar::kGridG, radar::kGridB);
   radar::kColorLabel = tft.color565(255, 255, 255);
   radar::kColorCenter = tft.color565(255, 255, 255);
-  // GC9A01 BGR panel: swap R/B in color565 so logical red renders red on screen.
+  // BGR panels (e.g. GC9A01): swap R/B in color565 so logical red renders red.
+  // The 8048S050 RGB panel is RGB-ordered, so kDisplayRgbOrder is false.
   if (config::kDisplayRgbOrder) {
     radar::kColorAircraft =
         tft.color565(radar::kAircraftB, radar::kAircraftG, radar::kAircraftR);
@@ -520,8 +522,8 @@ void drawAircraft() {
   const size_t n = services::adsb::snapshotAircraft(
       planes, services::adsb::kMaxAircraft, &base_ms);
 
-  AircraftDrawItem items[services::adsb::kMaxAircraft];
-  BeyondDotDrawItem dots[services::adsb::kMaxAircraft];
+  static AircraftDrawItem items[services::adsb::kMaxAircraft];  // static: keep off loop stack
+  static BeyondDotDrawItem dots[services::adsb::kMaxAircraft];
   size_t draw_count = 0;
   size_t dot_count = 0;
 
@@ -681,7 +683,7 @@ void drawStaticGrid(Gfx& gfx) {
   const int cy = radar::kCenterY;
   const int grid_r = radar::kGridOuterRadius;
 
-  gfx.fillScreen(radar::kColorBackground);
+  displayFillGently(gfx, radar::kColorBackground);
   drawRings(cx, cy, grid_r);
   drawCrosshairs(cx, cy, grid_r, radar::kColorGrid);
   initPalette();
@@ -696,7 +698,10 @@ bool ensureFrameSprite() {
   if (s_frame_ready) {
     return true;
   }
-  s_frame.setColorDepth(lgfx::color_depth_t::rgb332_1Byte);
+  // 480x480 RGB565 = 450 KB: lives in PSRAM (8 MB on the N16R8 module). Full
+  // 16-bit colour instead of the RGB332 buffer the 240x240 C3 build needed.
+  s_frame.setPsram(true);
+  s_frame.setColorDepth(lgfx::color_depth_t::rgb565_2Byte);
   if (!s_frame.createSprite(radar::kSize, radar::kSize)) {
     Serial.println("radar: frame sprite alloc failed");
     return false;
@@ -708,14 +713,15 @@ bool ensureFrameSprite() {
 // Double-buffered frame: composite the grid AND aircraft into the off-screen
 // sprite, then blit it to the panel in a single pushSprite. Because the panel
 // is updated in one pass, labels never show an erase/redraw gap — no flicker.
-void renderFrame() {
+void renderFrame(bool force_panel) {
   drawStaticGrid(s_frame);  // opens its own DrawScope(s_frame)
   {
     const DrawScope scope(s_frame);
     drawAircraft();
   }
-  s_frame.pushSprite(0, 0);
+  displayPushSpriteGently(s_frame, config::kRadarOriginX, config::kRadarOriginY);
   tft.setTextDatum(textdatum_t::top_left);
+  sidePanelDraw(force_panel);
 }
 
 }  // namespace
@@ -725,22 +731,26 @@ void radarDisplayDraw() {
   initLabelMetrics();
 
   if (ensureFrameSprite()) {
-    renderFrame();
+    renderFrame(true);
     return;
   }
 
   // Fallback when the sprite can't be allocated: draw straight to the panel.
+  // Radar-local coordinates map 1:1 onto the panel only at origin (0, 0).
+  static_assert(config::kRadarOriginX == 0 && config::kRadarOriginY == 0,
+                "direct-draw fallback assumes the radar sits at the panel origin");
   const DrawScope scope(tft);
   drawStaticGrid(tft);
   drawAircraft();
   tft.setTextDatum(textdatum_t::top_left);
+  sidePanelDraw(true);
 }
 
 void radarDisplayRefreshAircraft() {
   initPalette();
 
   if (ensureFrameSprite()) {
-    renderFrame();
+    renderFrame(false);
     return;
   }
 

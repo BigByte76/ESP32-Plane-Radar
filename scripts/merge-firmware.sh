@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV="${PIOENV:-supermini}"
+ENV="${PIOENV:-esp32-8048s050}"
 NO_BUILD=0
 OUT="${ROOT}/release/plane-radar-merged.bin"
 
@@ -12,7 +12,7 @@ usage() {
 Usage: scripts/merge-firmware.sh [options]
 
   --no-build     Skip pio run (merge only; firmware must already be built)
-  --env NAME     PlatformIO env (default: supermini)
+  --env NAME     PlatformIO env (default: esp32-8048s050)
   -o PATH        Output file (default: release/plane-radar-merged.bin)
   -h, --help     Show this help
 EOF
@@ -54,4 +54,4 @@ fi
 mkdir -p "$(dirname "$OUT")"
 cp "$MERGED" "$OUT"
 echo "Wrote ${OUT}"
-echo "Flash at offset 0x0 with chip ESP32-C3, 4MB flash (Web Serial flasher)."
+echo "Flash at offset 0x0 with chip ESP32-S3, 16MB flash (Web Serial flasher)."

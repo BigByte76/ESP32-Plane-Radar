@@ -20,7 +20,9 @@ struct Aircraft {
   char alt[12];
 };
 
-constexpr size_t kMaxAircraft = 64;
+/** Raised from 64: the 50 km preset on the 5" screen can see well over 64
+ *  aircraft near a hub. Excess entries beyond this are dropped by the parser. */
+constexpr size_t kMaxAircraft = 128;
 
 /** Create the internal lock. Call once before any fetch/snapshot. */
 void init();

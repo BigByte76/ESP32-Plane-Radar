@@ -1,5 +1,5 @@
 # PlatformIO post-build script: merge bootloader + partitions + app into one .bin
-# Usage: pio run -t merge -e supermini
+# Usage: pio run -t merge -e esp32-8048s050
 
 Import("env")
 
@@ -14,8 +14,8 @@ def merge_firmware(source, target, env):
     esptool = join(env.PioPlatform().get_package_dir("tool-esptoolpy"), "esptool.py")
     boot_app0 = join(framework_dir, "tools", "partitions", "boot_app0.bin")
     merged = join(build_dir, "firmware-merged.bin")
-    mcu = env.BoardConfig().get("build.mcu", "esp32c3")
-    flash_size = env.BoardConfig().get("upload.flash_size", "4MB")
+    mcu = env.BoardConfig().get("build.mcu", "esp32s3")
+    flash_size = env.BoardConfig().get("upload.flash_size", "16MB")
 
     bootloader = join(build_dir, "bootloader.bin")
     partitions = join(build_dir, "partitions.bin")

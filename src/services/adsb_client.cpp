@@ -356,7 +356,9 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
 
   // Parse into a local buffer, then publish atomically so a reader on another
   // thread never sees a half-updated list.
-  Aircraft parsed[kMaxAircraft];
+  // static: 128 entries are too big for the fetch task's stack; only the
+  // single fetch task ever calls fetchUpdate(), so this is not shared.
+  static Aircraft parsed[kMaxAircraft];
   size_t n = 0;
   JsonArray ac = doc["ac"].as<JsonArray>();
   if (!ac.isNull()) {

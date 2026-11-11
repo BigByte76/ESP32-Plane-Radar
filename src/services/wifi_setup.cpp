@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include <Preferences.h>
+#include <Update.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
 
@@ -60,6 +61,8 @@ constexpr char kWifiPrefsNamespace[] = "wifi";
 constexpr char kPrefsForcePortalKey[] = "portal";
 
 bool s_force_config_portal = false;
+/** Set when a portal firmware upload starts; read by the ADS-B task (core 0). */
+volatile bool s_ota_in_progress = false;
 WiFiManager s_wm;
 bool s_wm_configured = false;
 
@@ -218,6 +221,16 @@ bool wifiLinkUp() {
          WiFi.localIP() != IPAddress(0, 0, 0, 0);
 }
 
+/** Runs on the loop task just before WiFiManager calls Update.begin(). The
+ *  upload itself blocks inside s_wm.process(), so the radar stops redrawing;
+ *  show a status screen and stop ADS-B fetches so TLS traffic and the HTTPS
+ *  task don't compete with the flash writes. */
+void onPreOtaUpdate() {
+  s_ota_in_progress = true;
+  Serial.println("OTA: firmware upload started");
+  statusScreenOtaUpdating();
+}
+
 void ensureWifiManager() {
   if (s_wm_configured) {
     return;
@@ -227,6 +240,7 @@ void ensureWifiManager() {
                            IPAddress(255, 255, 255, 0));
   s_wm.setHostname(config::kPortalHostname);
   s_wm.setAPCallback(onConfigPortalApStarted);
+  s_wm.setPreOtaUpdateCallback(onPreOtaUpdate);
   attachPortalParams(s_wm);
   s_wm_configured = true;
 }
@@ -390,6 +404,8 @@ bool wifiBootButtonPressed() {
 
 void bootButtonInit() { initBootButton(); }
 
+bool wifiOtaInProgress() { return s_ota_in_progress; }
+
 bool bootButtonConsumeTap() {
   portENTER_CRITICAL(&s_boot_mux);
   const bool tap = s_boot_tap_pending;
@@ -446,6 +462,12 @@ void wifiLoop() {
     if (s_wm.getWebPortalActive() || s_wm.getConfigPortalActive()) {
       bootButtonPollLongPress();
       s_wm.process();
+    }
+    // A successful upload reboots inside process(); getting here with the flag
+    // still set means the upload failed or was aborted, so resume normal work.
+    if (s_ota_in_progress && !Update.isRunning()) {
+      s_ota_in_progress = false;
+      Serial.println("OTA: upload failed — resuming");
     }
   } else {
     stopLanWebPortal();

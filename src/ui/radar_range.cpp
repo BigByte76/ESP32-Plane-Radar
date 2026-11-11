@@ -78,6 +78,24 @@ void rangeNext() {
   saveRangeIndex();
 }
 
+bool rangeZoomOut() {
+  if (s_range_index + 1 >= kRangePresetCount) {
+    return false;
+  }
+  ++s_range_index;
+  saveRangeIndex();
+  return true;
+}
+
+bool rangeZoomIn() {
+  if (s_range_index == 0) {
+    return false;
+  }
+  --s_range_index;
+  saveRangeIndex();
+  return true;
+}
+
 const RangePreset& rangeCurrent() { return kRangePresets[s_range_index]; }
 
 uint8_t rangeIndex() { return s_range_index; }
@@ -101,6 +119,12 @@ void saveMilesFromPortal(const char* checkbox_value) {
 
 void saveRunwaysFromPortal(const char* checkbox_value) {
   s_show_runways = portalCheckboxChecked(checkbox_value);
+  saveShowRunways();
+  Serial.printf("Runway overlay: %s\n", s_show_runways ? "on" : "off");
+}
+
+void toggleRunways() {
+  s_show_runways = !s_show_runways;
   saveShowRunways();
   Serial.printf("Runway overlay: %s\n", s_show_runways ? "on" : "off");
 }

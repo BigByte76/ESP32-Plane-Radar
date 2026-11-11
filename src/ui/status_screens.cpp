@@ -13,14 +13,17 @@
 
 namespace {
 
-constexpr int kLineGap = 6;
+// Status screens were laid out for a 240x240 round panel; on the 800x480
+// ESP32-8048S050 text and spinner are scaled up (kVlwScale) and stay centred.
+constexpr float kVlwScale = 2.0f;
+constexpr int kLineGap = 12;
 const int kCenterX = config::kDisplayWidth / 2;
 const int kCenterY = config::kDisplayHeight / 2;
 
 constexpr int kSpinnerDotCount = 10;
-constexpr int kSpinnerRadius = 113;
-constexpr int kSpinnerDotRadius = 2;
-constexpr int kSpinnerEraseRadius = 4;
+constexpr int kSpinnerRadius = 210;
+constexpr int kSpinnerDotRadius = 5;
+constexpr int kSpinnerEraseRadius = 8;
 constexpr float kSpinnerStepDeg = 6.0f;
 
 struct SpinnerDot {
@@ -31,18 +34,17 @@ struct SpinnerDot {
 
 char s_connecting_ssid[33];
 char s_ssid_line[33];
-constexpr int kConnectingTextMaxWidthPx = 220;
+constexpr int kConnectingTextMaxWidthPx = 560;
 float s_spinner_angle_deg = -90.0f;
 SpinnerDot s_spinner_dots[kSpinnerDotCount];
 bool s_connecting_text_drawn = false;
 
-constexpr auto& kGfxTitle = fonts::FreeSans18pt7b;
-constexpr auto& kGfxBody = fonts::FreeSans12pt7b;
-constexpr auto& kGfxDetail = fonts::Font2;
-constexpr auto& kPortalGfxTitle = fonts::FreeSansBold18pt7b;
-constexpr auto& kPortalGfxBody = fonts::FreeSansBold12pt7b;
-constexpr auto& kPortalGfxEmphasis = fonts::FreeSansBold18pt7b;
-constexpr auto& kConnectingGfxDetail = fonts::FreeSans9pt7b;
+constexpr auto& kGfxTitle = fonts::FreeSans24pt7b;
+constexpr auto& kGfxBody = fonts::FreeSans18pt7b;
+constexpr auto& kPortalGfxTitle = fonts::FreeSansBold24pt7b;
+constexpr auto& kPortalGfxBody = fonts::FreeSansBold18pt7b;
+constexpr auto& kPortalGfxEmphasis = fonts::FreeSansBold24pt7b;
+constexpr auto& kConnectingGfxDetail = fonts::FreeSans18pt7b;
 
 struct TextLine {
   const char* text;
@@ -56,13 +58,13 @@ int lineHeightGfx(const lgfx::GFXfont* font) {
 }
 
 int lineHeightVlw(float size) {
-  displayFontSetSmoothSize(tft, size);
+  displayFontSetSmoothSize(tft, size * kVlwScale);
   return tft.fontHeight();
 }
 
 void applyLineStyle(const TextLine& line) {
   if (displayFontIsSmooth()) {
-    displayFontSetSmoothSize(tft, line.vlw_size);
+    displayFontSetSmoothSize(tft, line.vlw_size * kVlwScale);
   } else {
     displayFontSetBitmap(tft, line.gfx_font);
   }
@@ -96,7 +98,7 @@ void drawTextBlock(uint16_t bg, uint16_t fg, const TextLine* lines, size_t count
   }
 }
 
-constexpr float kConnectingDetailVlw = 0.92f;
+constexpr float kConnectingDetailVlw = 0.92f * kVlwScale;
 
 void applyConnectingDetailStyle() {
   if (displayFontIsSmooth()) {
@@ -226,6 +228,16 @@ void statusScreenConnectFailed() {
       {"and signal strength.", 1.0f, &kGfxBody},
       {"Hold BOOT 3 sec", 1.0f, &kGfxBody},
       {"to reset Wi-Fi", 1.0f, &kGfxBody},
+  };
+  drawTextBlock(config::kColorYellow, config::kTextOnYellow, lines,
+                sizeof(lines) / sizeof(lines[0]));
+}
+
+void statusScreenOtaUpdating() {
+  const TextLine lines[] = {
+      {"Updating firmware", 1.15f, &kPortalGfxTitle},
+      {"Do not power off.", 1.05f, &kPortalGfxBody},
+      {"Restarts when done.", 1.05f, &kPortalGfxBody},
   };
   drawTextBlock(config::kColorYellow, config::kTextOnYellow, lines,
                 sizeof(lines) / sizeof(lines[0]));
