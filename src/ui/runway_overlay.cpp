@@ -33,7 +33,7 @@ int measureVlwHeight(lgfx::LGFXBase& gfx, float size) {
 
 float findVlwSizeForHeight(lgfx::LGFXBase& gfx, int target_px) {
   float lo = 0.2f;
-  float hi = 1.2f;
+  float hi = radar::kVlwMaxScale;
   for (int i = 0; i < 14; ++i) {
     const float mid = (lo + hi) * 0.5f;
     if (measureVlwHeight(gfx, mid) < target_px) {

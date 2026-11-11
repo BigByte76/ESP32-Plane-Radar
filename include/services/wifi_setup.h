@@ -10,6 +10,9 @@ bool wifiReconnect();
 /** Keeps the LAN config portal alive; call every loop() iteration. */
 void wifiLoop();
 bool wifiBootButtonPressed();
+/** True once a firmware upload has started via the portal's /update page.
+ *  Stays set until the device reboots (on success) or the upload fails. */
+bool wifiOtaInProgress();
 /** GPIO + interrupt setup; call once early in setup(). */
 void bootButtonInit();
 /** Latched short tap (survives blocking HTTP/display work). */

@@ -1,5 +1,6 @@
 /**
- * Plane Radar — WiFi setup, then radar UI on the round GC9A01 display.
+ * Plane Radar — WiFi setup, then radar UI on the Sunton ESP32-8048S050
+ * (5" 800x480 RGB panel + GT911 touch): 480x480 scope plus a touch info panel.
  */
 
 #include <Arduino.h>
@@ -12,6 +13,7 @@
 #include "services/wifi_setup.h"
 #include "ui/radar_display.h"
 #include "ui/radar_range.h"
+#include "ui/side_panel.h"
 #include "ui/status_screens.h"
 
 namespace {
@@ -30,8 +32,7 @@ void showRadarIfConnected() {
   g_radar_visible = true;
 }
 
-void onRangeTap() {
-  ui::radar::rangeNext();
+void onRangeChanged() {
   char range_label[12];
   ui::radar::formatCurrentRing3Label(range_label, sizeof(range_label));
   Serial.printf("Range: %s (outer ~%.0f km)\n", range_label,
@@ -42,6 +43,11 @@ void onRangeTap() {
   }
 }
 
+void onRangeTap() {
+  ui::radar::rangeNext();
+  onRangeChanged();
+}
+
 void handleBootButton() {
   bootButtonPollLongPress();
   if (bootButtonConsumeTap()) {
@@ -49,13 +55,73 @@ void handleBootButton() {
   }
 }
 
+/** Act on a completed tap (finger lifted) at screen coordinate x, y. */
+void onTouchTap(int x, int y) {
+  if (!g_radar_visible) {
+    return;
+  }
+  switch (ui::sidePanelHitTest(x, y)) {
+    case ui::PanelButton::kZoomIn:
+      if (ui::radar::rangeZoomIn()) {
+        onRangeChanged();
+      }
+      return;
+    case ui::PanelButton::kZoomOut:
+      if (ui::radar::rangeZoomOut()) {
+        onRangeChanged();
+      }
+      return;
+    case ui::PanelButton::kRunways:
+      ui::radar::toggleRunways();
+      ui::radarDisplayDraw();
+      return;
+    case ui::PanelButton::kNone:
+      break;
+  }
+  // Anywhere on the radar scope: cycle range, same as a BOOT tap.
+  if (x < config::kPanelX) {
+    onRangeTap();
+  }
+}
+
+/** Poll the GT911; fire onTouchTap() on release of a short press. */
+void handleTouch() {
+  static unsigned long s_last_poll_ms = 0;
+  static bool s_down = false;
+  static unsigned long s_down_ms = 0;
+  static int32_t s_down_x = 0;
+  static int32_t s_down_y = 0;
+  constexpr unsigned long kMaxTapMs = 1500;
+
+  const unsigned long now = millis();
+  if (now - s_last_poll_ms < config::kTouchPollMs) {
+    return;
+  }
+  s_last_poll_ms = now;
+
+  int32_t x = 0;
+  int32_t y = 0;
+  const bool touching = tft.getTouch(&x, &y) > 0;
+  if (touching && !s_down) {
+    s_down = true;
+    s_down_ms = now;
+    s_down_x = x;
+    s_down_y = y;
+  } else if (!touching && s_down) {
+    s_down = false;
+    if (now - s_down_ms <= kMaxTapMs) {
+      onTouchTap(static_cast<int>(s_down_x), static_cast<int>(s_down_y));
+    }
+  }
+}
+
 // ADS-B fetch runs on its own task: the HTTPS request blocks for ~1-2 s, and
 // keeping it off the main loop lets the radar keep redrawing (dead-reckoned) at
-// 4 Hz throughout. The task publishes into the shared aircraft buffer under a
+// 2 Hz throughout. The task publishes into the shared aircraft buffer under a
 // lock; the render loop reads a snapshot.
 void adsbFetchTask(void*) {
   for (;;) {
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED && !wifiOtaInProgress()) {
       services::adsb::fetchUpdate(services::location::lat(),
                                   services::location::lon(),
                                   ui::radar::fetchRadiusKm());
@@ -70,7 +136,8 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  Serial.println("Plane Radar");
+  Serial.println("Plane Radar (ESP32-8048S050)");
+  Serial.printf("PSRAM: %u bytes free\n", static_cast<unsigned>(ESP.getFreePsram()));
 
   bootButtonInit();
   displayInit();
@@ -87,11 +154,12 @@ void setup() {
 
   // Start the background ADS-B fetch (pinned to core 0, away from the render
   // loop on core 1). It checks Wi-Fi state each cycle.
-  xTaskCreatePinnedToCore(adsbFetchTask, "adsb", 16384, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(adsbFetchTask, "adsb", 20480, nullptr, 1, nullptr, 0);
 }
 
 void loop() {
   handleBootButton();
+  handleTouch();
   wifiLoop();
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -118,7 +186,7 @@ void loop() {
     if (!g_radar_visible) {
       showRadarIfConnected();
     } else if (millis() - g_last_redraw_ms >= config::kRadarRedrawIntervalMs) {
-      // Redraw at 4 Hz with dead-reckoned positions; the ADS-B fetch runs on
+      // Redraw at 2 Hz with dead-reckoned positions; the ADS-B fetch runs on
       // its own task (adsbFetchTask).
       g_last_redraw_ms = millis();
       ui::radarDisplayRefreshAircraft();

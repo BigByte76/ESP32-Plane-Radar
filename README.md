@@ -4,7 +4,11 @@
 
 **3D printed case (STL + assembly):** [MakerWorld](https://makerworld.com/en/models/2872376-esp32-plane-radar-live-ads-b-on-a-round-display#profileId-3207083) · **Firmware:** [Releases](https://github.com/MatixYo/ESP32-Plane-Radar/releases)
 
-Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (240×240). Shows a circular **ADS-B radar** around your configured location, with **WiFiManager** for first-time setup.
+> **ESP32-8048S050 port.** This branch targets the **Sunton ESP32-8048S050** (ESP32-S3-WROOM-1 N16R8, 5″ 800×480 16-bit RGB panel, GT911 capacitive touch) instead of the original ESP32-C3 Super Mini + 1.28″ GC9A01. Panel pins and timings come from the ESP-IDF reference driver [mr-sven/esp32-8048S050C](https://github.com/mr-sven/esp32-8048S050C); the firmware stays on Arduino + LovyanGFX (`Bus_RGB` / `Panel_RGB` / `Touch_GT911`) so the radar code is unchanged in structure.
+>
+> Screen layout: a **480×480 radar scope** on the left (the original 240×240 UI scaled ×2, full RGB565 in PSRAM) and a **320×480 touch panel** on the right with ring range, aircraft count, the six nearest aircraft (callsign, type, altitude, distance + compass point) and **− / + / RWY** buttons.
+
+Firmware that shows a circular **ADS-B radar** around your configured location, with **WiFiManager** for first-time setup.
 
 ## What it does
 
@@ -13,14 +17,25 @@ Firmware for an **ESP32-C3 Super Mini** and a **1.28″ round GC9A01** display (
 
 After Wi‑Fi is saved, the device reconnects automatically; the radar runs in the main loop with periodic ADS-B updates (~5 s).
 
-## Controls (BOOT, GPIO 9, active LOW)
+## Controls
+
+**Touch screen**
 
 | Action | Effect |
 |--------|--------|
-| **Short tap** | Cycle range preset (5 → 10 → 15 → 25 km); saved to flash |
+| Tap **−** | Wider range (next larger preset); saved to flash |
+| Tap **+** | Tighter range (next smaller preset); saved to flash |
+| Tap **RWY** | Toggle the runway overlay; saved to flash |
+| Tap the radar scope | Cycle range preset (5 → 10 → 15 → 25 → 50 km) |
+
+**BOOT button** (on the back of the board, GPIO 0, active LOW)
+
+| Action | Effect |
+|--------|--------|
+| **Short tap** | Cycle range preset; saved to flash |
 | **Hold 3 s** | Clear Wi‑Fi, location, and units; reboot into setup portal |
 
-During setup you can also hold BOOT at power-on to force a credential reset (same as the long press).
+GPIO 0 is an ESP32-S3 strapping pin: holding BOOT *while powering on* puts the chip in download mode, so on this board press it only after the screen is lit.
 
 ## Wi‑Fi setup portal
 
@@ -65,6 +80,7 @@ Layout and colors: `include/ui/radar_theme.h`.
 | 10 km / 6 mi | ~13.3 km (default) |
 | 15 km / 9 mi | ~20 km |
 | 25 km / 16 mi | ~33.3 km |
+| 50 km / 31 mi | ~66.7 km (added for the 5″ screen) |
 
 Preset and miles/km choice persist across reboot (`planeradar` NVS namespace).
 
@@ -98,7 +114,9 @@ Edit **`include/config.h`** for hardware and behavior:
 | Portal | `kPortalApName`, `kPortalIp`, `kPortalHostname` / `kPortalHostUrl` (mDNS; needs `-DWM_MDNS` in `platformio.ini`) |
 | Wi‑Fi timing | connect attempts, reconnect grace, portal timeout (`0` = no timeout) |
 | BOOT | `kBootPin`, `kBootResetHoldMs`, `kBootTapMinMs` |
-| Display SPI | pins, `kDisplayInvert`, `kDisplayRgbOrder`, `kDisplaySpiWriteHz` |
+| Display (RGB) | `kLcdPinData[16]`, sync/DE/PCLK pins, porches, `kLcdPclkHz` (14 MHz; 12 MHz gives a white screen on this panel) |
+| Touch (GT911) | I2C pins, reset pin, `kTouchI2cAddr` (0x5D — INT is tied to GND on this board) |
+| Layout | `kRadarOriginX/Y`, `kPanelX`, `kPanelWidth` |
 | Default location | `kDefaultRadarLat`, `kDefaultRadarLon` (until portal overrides) |
 | ADS-B | `kAdsbFetchIntervalMs`, `kAdsbShowGroundAircraft` |
 
@@ -121,6 +139,7 @@ include/
     radar_display.h
     runway_overlay.h
     status_screens.h
+    side_panel.h           — right-hand touch / info panel
   services/
     wifi_setup.h
     radar_location.h
@@ -138,18 +157,19 @@ src/
   services/
 ```
 
-## Wiring (GC9A01 ↔ ESP32-C3 Super Mini)
+## Hardware (Sunton ESP32-8048S050, all on-board)
 
-| Display | ESP32-C3 |
-|---------|----------|
-| VCC | 3V3 |
-| GND | GND |
-| RST | GPIO **0** |
-| CS | GPIO **1** |
-| DC | GPIO **10** |
-| SDA (MOSI) | GPIO **3** |
-| SCL (SCLK) | GPIO **4** |
-| BOOT (user) | GPIO **9** |
+| Function | GPIO |
+|----------|------|
+| RGB data B0–B4 | 8, 3, 46, 9, 1 |
+| RGB data G0–G5 | 5, 6, 7, 15, 16, 4 |
+| RGB data R0–R4 | 45, 48, 47, 21, 14 |
+| HSYNC / VSYNC / DE / PCLK | 39 / 41 / 40 / 42 |
+| Backlight (PWM) | 2 |
+| Touch I2C SDA / SCL / RST | 19 / 20 / 38 (INT not connected) |
+| BOOT (user) | 0 |
+
+No wiring needed — everything is on the board. Power and serial are via the USB‑C port (CH340 USB‑UART).
 
 ## Build
 
@@ -158,13 +178,23 @@ pio run -t upload
 pio device monitor
 ```
 
-- PlatformIO env: **`supermini`**
-- Serial: **115200** baud
-- USB CDC on boot enabled in `platformio.ini` for the Super Mini
+- PlatformIO env: **`esp32-8048s050`** (board `esp32-s3-devkitc-1`, 16 MB QIO flash, OPI PSRAM)
+- Serial: **115200** baud over the on-board CH340 (USB CDC on boot disabled)
+- Partition table: `partitions/plane_radar_16mb.csv` (two 6 MB app slots for OTA)
+
+### OTA update (over Wi‑Fi)
+
+Once the device runs an OTA-capable build (flash it over USB once after changing to the two-slot partition table), update it from a browser:
+
+1. Build: `pio run -e esp32-8048s050` → `.pio/build/esp32-8048s050/firmware.bin` (the app image — **not** `firmware-merged.bin`)
+2. Open **`http://plane-radar.local/update`** (or `http://<device-ip>/update`), choose the `.bin`, press **Update**
+3. The screen shows “Updating firmware”; the device reboots into the new build. Settings in NVS are kept.
+
+The upload page has no password — anyone on your LAN can reach it.
 
 ### Web-flashable release image
 
-Single `.bin` for [esptool-js](https://espressif.github.io/esptool-js/) and similar tools (ESP32-C3, 4 MB, flash at **0x0**):
+Single `.bin` for [esptool-js](https://espressif.github.io/esptool-js/) and similar tools (ESP32-S3, 16 MB, flash at **0x0**):
 
 ```bash
 chmod +x scripts/merge-firmware.sh   # once
@@ -177,11 +207,11 @@ Writes `release/plane-radar-merged.bin`. Skip rebuild if firmware is already bui
 ./scripts/merge-firmware.sh --no-build
 ```
 
-Or via PlatformIO only (output: `.pio/build/supermini/firmware-merged.bin`):
+Or via PlatformIO only (output: `.pio/build/esp32-8048s050/firmware-merged.bin`):
 
 ```bash
-pio run -e supermini
-pio run -t merge -e supermini
+pio run -e esp32-8048s050
+pio run -t merge -e esp32-8048s050
 ```
 
 Put the board in download mode (hold **BOOT**, tap **RESET**), then flash with Chrome/Edge over USB.
@@ -190,7 +220,7 @@ Put the board in download mode (hold **BOOT**, tap **RESET**), then flash with C
 
 | Workflow | When | Output |
 |----------|------|--------|
-| [Build](.github/workflows/build.yml) | Push / PR to `main` | Artifact `plane-radar-supermini` (merged + split `.bin` files, ~90 days) |
+| [Build](.github/workflows/build.yml) | Push / PR to `main` | Artifact `plane-radar-esp32-8048s050` (merged + split `.bin` files, ~90 days) |
 | [Release](.github/workflows/release.yml) | Git tag `v*` (e.g. `v1.0.0`) | GitHub Release asset `plane-radar-v1.0.0.bin` + `.sha256` |
 
 To ship a version users can download:
@@ -200,7 +230,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The release workflow builds firmware in CI and attaches the merged image to the release. Download from **Releases** on GitHub, then flash at **0x0** (ESP32-C3, 4 MB).
+The release workflow builds firmware in CI and attaches the merged image to the release. Download from **Releases** on GitHub, then flash at **0x0** (ESP32-S3, 16 MB).
 
 ## Dependencies
 

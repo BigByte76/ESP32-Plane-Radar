@@ -38,18 +38,18 @@ jobs:
         run: pip install --upgrade platformio
 
       - name: Build
-        run: pio run -e supermini
+        run: pio run -e esp32-8048s050
 
       - name: Merge web-flash image
-        run: pio run -t merge -e supermini
+        run: pio run -t merge -e esp32-8048s050
 
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: plane-radar-supermini
+          name: plane-radar-esp32-8048s050
           if-no-files-found: error
           path: |
-            .pio/build/supermini/firmware-merged.bin
-            .pio/build/supermini/firmware.bin
-            .pio/build/supermini/bootloader.bin
-            .pio/build/supermini/partitions.bin
+            .pio/build/esp32-8048s050/firmware-merged.bin
+            .pio/build/esp32-8048s050/firmware.bin
+            .pio/build/esp32-8048s050/bootloader.bin
+            .pio/build/esp32-8048s050/partitions.bin
