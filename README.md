@@ -10,6 +10,28 @@
 
 Firmware that shows a circular **ADS-B radar** around your configured location, with **WiFiManager** for first-time setup.
 
+## Screenshots
+
+Rendered from the firmware's own drawing code and WiFiManager's page templates with sample data (aircraft, network names and password are made up). Regenerate with `./tools/preview/render.sh`.
+
+**Radar** — scope on the left, nearest aircraft and touch buttons on the right:
+
+![Radar view](docs/preview/display-radar.png)
+
+**Web login card** — tap the panel title (**WEB LOGIN**) to show the portal address, user and password:
+
+![Web login card](docs/preview/display-web-login.png)
+
+| Wi‑Fi setup | Connecting | Firmware update |
+|---|---|---|
+| ![Setup screen](docs/preview/display-setup.png) | ![Connecting screen](docs/preview/display-connecting.png) | ![Updating firmware screen](docs/preview/display-ota.png) |
+
+**Web portal** (on your network, after logging in):
+
+| Menu | Wi‑Fi and settings | Firmware update |
+|---|---|---|
+| <img src="docs/preview/portal-menu.png" width="260" alt="Portal menu"> | <img src="docs/preview/portal-settings.png" width="260" alt="Wi-Fi and settings page"> | <img src="docs/preview/portal-update.png" width="260" alt="Firmware update page"> |
+
 ## What it does
 
 1. **Wi‑Fi setup** (if needed) — captive portal on the password-protected AP **`PlaneRadar-Setup`**
@@ -161,6 +183,10 @@ data/
 scripts/
   build_large_airports.py
   run-tests.sh             — host unit tests
+tools/
+  preview/                 — renders docs/preview/ screenshots on a desktop
+docs/
+  preview/                 — screenshots used in this README
 tests/
   host/                    — C++ tests against stubbed Arduino/ESP APIs
   python/
@@ -206,6 +232,16 @@ pio device monitor
 ```
 
 Rendering, touch and Wi‑Fi need the board and are not covered.
+
+### Screenshots
+
+```bash
+./tools/preview/render.sh            # device screens + web portal -> docs/preview/
+./tools/preview/render.sh --display  # device screens only
+./tools/preview/render.sh --portal   # web portal only
+```
+
+Device screens compile the firmware's UI code for the desktop and draw into an off-screen 800×480 buffer (needs a C++17 compiler and zlib; no SDL). Portal pages are rebuilt from WiFiManager's templates with this firmware's fields and captured with headless Chrome. Sample traffic and settings live in `tools/preview/preview_main.cpp` and `tools/preview/portal_pages.py`.
 
 ### OTA update (over Wi‑Fi)
 
