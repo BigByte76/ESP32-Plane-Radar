@@ -10,6 +10,7 @@
 #include "config.h"
 #include "hardware/display.h"
 #include "hardware/display_font.h"
+#include "services/portal_security.h"
 
 namespace {
 
@@ -209,10 +210,16 @@ void statusScreenConnectingTick() {
 }
 
 void statusScreenPortal() {
+  // The setup AP is WPA2-protected with the device's portal password, which is
+  // only ever shown here and on the side panel.
+  static char pw_line[48];
+  snprintf(pw_line, sizeof(pw_line), "Password: %s",
+           services::portal_security::password());
   const TextLine lines[] = {
       {"Wi-Fi setup", 1.15f, &kPortalGfxTitle},
       {"1. Join network:", 1.05f, &kPortalGfxBody},
       {config::kPortalApName, 1.12f, &kPortalGfxEmphasis},
+      {pw_line, 1.12f, &kPortalGfxEmphasis},
       {"2. Open in browser:", 1.05f, &kPortalGfxBody},
       {config::kPortalHostUrl, 1.12f, &kPortalGfxEmphasis},
       {"or 192.168.4.1", 1.0f, &kPortalGfxBody},

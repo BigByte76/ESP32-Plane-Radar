@@ -1,6 +1,7 @@
 #include "ui/side_panel.h"
 
 #include <Arduino.h>
+#include <WiFi.h>
 #include <lgfx/v1/lgfx_fonts.hpp>
 
 #include <cmath>
@@ -9,6 +10,7 @@
 #include "config.h"
 #include "hardware/display.h"
 #include "services/adsb_client.h"
+#include "services/portal_security.h"
 #include "services/radar_location.h"
 #include "ui/radar_range.h"
 #include "ui/radar_theme.h"
@@ -40,8 +42,13 @@ constexpr float kKmPerDeg = 111.0f;
 constexpr float kDegToRad = 3.14159265f / 180.0f;
 constexpr float kKmPerMile = 1.609344f;
 
+/** How long the web-login card stays up after tapping the title. */
+constexpr unsigned long kLoginCardShowMs = 60000;
+
 LGFX_Sprite s_panel(&tft);
 bool s_panel_ready = false;
+bool s_login_card = false;
+unsigned long s_login_card_until_ms = 0;
 
 struct NearItem {
   size_t index;
@@ -133,6 +140,12 @@ void drawHeader(size_t total, size_t in_range) {
   s_panel.setFont(&fonts::FreeSansBold12pt7b);
   s_panel.setTextColor(radar::kColorLabel, radar::kColorBackground);
   s_panel.drawString("PLANE RADAR", kPadX, kTitleY);
+  // Affordance for the web-login card (tap anywhere on the title row).
+  s_panel.setFont(&fonts::FreeSans9pt7b);
+  s_panel.setTextColor(radar::kColorRunwayLabel, radar::kColorBackground);
+  s_panel.setTextDatum(textdatum_t::top_right);
+  s_panel.drawString(s_login_card ? "HIDE LOGIN" : "WEB LOGIN", kW - kPadX, kTitleY + 4);
+  s_panel.setTextDatum(textdatum_t::top_left);
 
   char range_label[12];
   radar::formatCurrentRing3Label(range_label, sizeof(range_label));
@@ -178,9 +191,63 @@ void drawRow(int row, const services::adsb::Aircraft& plane, const NearItem& ite
   s_panel.drawString(plane.alt, kW - kPadX, y + 27);
 }
 
+/** Web portal address and credentials, drawn over the aircraft list. Shown only
+ *  on request, so the password is visible to someone at the device, not to
+ *  anyone glancing at it. */
+void drawLoginCard() {
+  const int x = kPadX;
+  int y = kListTopY + 6;
+  constexpr int kLine = 30;
+
+  s_panel.setTextDatum(textdatum_t::top_left);
+  s_panel.setFont(&fonts::FreeSansBold12pt7b);
+  s_panel.setTextColor(radar::kColorLabel, radar::kColorBackground);
+  s_panel.drawString("Web portal / update", x, y);
+  y += kLine + 6;
+
+  s_panel.setFont(&fonts::FreeSans9pt7b);
+  s_panel.setTextColor(radar::kColorRunwayLabel, radar::kColorBackground);
+  char line[64];
+  snprintf(line, sizeof(line), "http://%s", config::kPortalHostUrl);
+  s_panel.drawString(line, x, y);
+  y += kLine - 6;
+  snprintf(line, sizeof(line), "http://%s", WiFi.localIP().toString().c_str());
+  s_panel.drawString(line, x, y);
+  y += kLine + 6;
+
+  s_panel.drawString("User", x, y);
+  s_panel.setFont(&fonts::FreeSansBold12pt7b);
+  s_panel.setTextColor(radar::kColorLabel, radar::kColorBackground);
+  s_panel.drawString(services::portal_security::kAuthUser, x + 100, y - 4);
+  y += kLine + 4;
+
+  s_panel.setFont(&fonts::FreeSans9pt7b);
+  s_panel.setTextColor(radar::kColorRunwayLabel, radar::kColorBackground);
+  s_panel.drawString("Password", x, y);
+  s_panel.setFont(&fonts::FreeSansBold12pt7b);
+  s_panel.setTextColor(radar::kColorTagType, radar::kColorBackground);
+  s_panel.drawString(services::portal_security::password(), x + 100, y - 4);
+  y += kLine + 14;
+
+  s_panel.setFont(&fonts::FreeSans9pt7b);
+  s_panel.setTextColor(radar::kColorRunwayLabel, radar::kColorBackground);
+  s_panel.drawString("Also the setup Wi-Fi password.", x, y);
+  y += kLine - 6;
+  s_panel.drawString("Hold BOOT 3 s to reset it.", x, y);
+}
+
 }  // namespace
 
+void sidePanelToggleLoginCard() {
+  s_login_card = !s_login_card;
+  s_login_card_until_ms = millis() + kLoginCardShowMs;
+}
+
 void sidePanelDraw(bool force) {
+  if (s_login_card && static_cast<long>(millis() - s_login_card_until_ms) >= 0) {
+    s_login_card = false;
+    force = true;
+  }
   static unsigned long s_last_draw_ms = 0;
   const unsigned long now = millis();
   if (!force && s_last_draw_ms != 0 &&
@@ -216,14 +283,16 @@ void sidePanelDraw(bool force) {
 
   drawHeader(n, in_range);
 
-  if (shown == 0) {
+  if (s_login_card) {
+    drawLoginCard();
+  } else if (shown == 0) {
     s_panel.setFont(&fonts::FreeSans9pt7b);
     s_panel.setTextDatum(textdatum_t::middle_center);
     s_panel.setTextColor(radar::kColorRunwayLabel, radar::kColorBackground);
     s_panel.drawString(base_ms == 0 ? "Waiting for ADS-B data..." : "No aircraft nearby",
                        kW / 2, kListTopY + (kMaxRows * kRowH) / 2);
   }
-  for (size_t r = 0; r < shown; ++r) {
+  for (size_t r = 0; r < shown && !s_login_card; ++r) {
     drawRow(static_cast<int>(r), planes[items[r].index], items[r]);
   }
 
@@ -238,6 +307,9 @@ void sidePanelDraw(bool force) {
 
 PanelButton sidePanelHitTest(int x, int y) {
   const int lx = x - config::kPanelX;
+  if (lx >= 0 && lx < kW && y >= 0 && y < kDividerY) {
+    return PanelButton::kLoginInfo;
+  }
   if (lx < 0 || lx >= kW || y < kButtonTopY - kButtonGap || y >= kH) {
     return PanelButton::kNone;
   }

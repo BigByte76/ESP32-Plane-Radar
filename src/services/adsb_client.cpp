@@ -8,9 +8,14 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include <cmath>
+#include <cstddef>
+#include <cstdlib>
 #include <cstring>
+#include <new>
 
 #include "config.h"
+#include "services/adsb_root_cas.h"
 #include "services/http_body_framing.h"
 
 namespace services::adsb {
@@ -21,6 +26,13 @@ constexpr char kApiBase[] = "https://opendata.adsb.fi/api/v3/lat/";
 constexpr float kKmPerNm = 1.852f;
 constexpr int kConnectTimeoutMs = 5000;  // TLS handshake needs room
 constexpr unsigned long kRequestTimeoutMs = 6000;
+/** Heap the parsed (filtered) JSON may use. A busy 50 km query is well under
+ *  100 KB; the cap stops an oversized or hostile response from exhausting RAM. */
+constexpr size_t kJsonBudgetBytes = 256 * 1024;
+/** Faster than anything in the feed; larger values are treated as bad data. */
+constexpr float kMaxGroundSpeedKnots = 2000.0f;
+/** Altitudes beyond this (ft) are bad data and get no tag. */
+constexpr float kMaxAltitudeFt = 200000.0f;
 
 Aircraft s_aircraft[kMaxAircraft];
 size_t s_aircraft_count = 0;
@@ -129,60 +141,113 @@ class PollingSocketSource {
 
 using BodyReader = services::http::BodyFramer<PollingSocketSource>;
 
+/**
+ * ArduinoJson allocator with a byte budget. Once the budget is spent it returns
+ * nullptr and deserializeJson() stops with NoMemory instead of growing until the
+ * heap runs out. Each block carries its size so frees return it to the budget.
+ */
+class BudgetAllocator : public ArduinoJson::Allocator {
+ public:
+  explicit BudgetAllocator(size_t budget) : remaining_(budget) {}
+
+  void* allocate(size_t size) override {
+    if (size > remaining_) {
+      return nullptr;
+    }
+    auto* h = static_cast<Header*>(malloc(sizeof(Header) + size));
+    if (h == nullptr) {
+      return nullptr;
+    }
+    h->size = size;
+    remaining_ -= size;
+    return h + 1;
+  }
+
+  void deallocate(void* ptr) override {
+    if (ptr == nullptr) {
+      return;
+    }
+    Header* h = static_cast<Header*>(ptr) - 1;
+    remaining_ += h->size;
+    free(h);
+  }
+
+  void* reallocate(void* ptr, size_t new_size) override {
+    if (ptr == nullptr) {
+      return allocate(new_size);
+    }
+    Header* h = static_cast<Header*>(ptr) - 1;
+    const size_t old_size = h->size;
+    if (new_size > old_size && new_size - old_size > remaining_) {
+      return nullptr;
+    }
+    auto* nh = static_cast<Header*>(realloc(h, sizeof(Header) + new_size));
+    if (nh == nullptr) {
+      return nullptr;
+    }
+    remaining_ = remaining_ + old_size - new_size;
+    nh->size = new_size;
+    return nh + 1;
+  }
+
+ private:
+  struct alignas(std::max_align_t) Header {
+    size_t size;
+  };
+  size_t remaining_;
+};
+
 float kmToNauticalMiles(float km) { return km / kKmPerNm; }
 
+/** Reads a finite number. Values like 1e999 (parsed as infinity) or ones too
+ *  large for a float count as absent, so nothing downstream sees inf/NaN. */
 bool readJsonFloat(const JsonObject& obj, const char* key, float* out) {
   if (obj[key].is<float>() || obj[key].is<double>() || obj[key].is<int>()) {
-    *out = obj[key].as<float>();
+    const float v = obj[key].as<float>();
+    if (!std::isfinite(v)) {
+      return false;
+    }
+    *out = v;
     return true;
   }
   return false;
 }
 
+/** Map any finite angle into [0, 360). */
+float normalizeDegrees(float deg) {
+  float d = std::fmod(deg, 360.0f);
+  if (d < 0.0f) {
+    d += 360.0f;
+  }
+  return d >= 360.0f ? 0.0f : d;
+}
+
 float pickNoseHeading(const JsonObject& plane) {
   float v = 0.0f;
-  if (readJsonFloat(plane, "true_heading", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "mag_heading", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "track", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "dir", &v)) {
-    return v;
+  if (readJsonFloat(plane, "true_heading", &v) ||
+      readJsonFloat(plane, "mag_heading", &v) || readJsonFloat(plane, "track", &v) ||
+      readJsonFloat(plane, "dir", &v)) {
+    return normalizeDegrees(v);
   }
   return 0.0f;
 }
 
 float pickTrackHeading(const JsonObject& plane) {
   float v = 0.0f;
-  if (readJsonFloat(plane, "track", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "true_heading", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "mag_heading", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "dir", &v)) {
-    return v;
+  if (readJsonFloat(plane, "track", &v) || readJsonFloat(plane, "true_heading", &v) ||
+      readJsonFloat(plane, "mag_heading", &v) || readJsonFloat(plane, "dir", &v)) {
+    return normalizeDegrees(v);
   }
   return 0.0f;
 }
 
+/** Knots in [0, kMaxGroundSpeedKnots]; out-of-range values mean "not moving"
+ *  so a bogus speed never flings a dead-reckoned position across the map. */
 float pickGroundSpeed(const JsonObject& plane) {
   float v = 0.0f;
-  if (readJsonFloat(plane, "gs", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "tas", &v)) {
-    return v;
-  }
-  if (readJsonFloat(plane, "ias", &v)) {
-    return v;
+  if (readJsonFloat(plane, "gs", &v) || readJsonFloat(plane, "tas", &v) ||
+      readJsonFloat(plane, "ias", &v)) {
+    return v >= 0.0f && v <= kMaxGroundSpeedKnots ? v : 0.0f;
   }
   return 0.0f;
 }
@@ -225,8 +290,9 @@ void formatAltitudeTag(const JsonObject& plane, char* out, size_t out_len) {
   }
 
   float alt = 0.0f;
-  if (readJsonFloat(plane, "alt_baro", &alt) ||
-      readJsonFloat(plane, "alt_geom", &alt)) {
+  if ((readJsonFloat(plane, "alt_baro", &alt) ||
+       readJsonFloat(plane, "alt_geom", &alt)) &&
+      std::fabs(alt) <= kMaxAltitudeFt) {
     snprintf(out, out_len, "%d ft", static_cast<int>(lroundf(alt)));
   }
 }
@@ -296,8 +362,10 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
     f[key] = true;
   }
 
+  // Verify the server against the pinned roots: without this anyone on the
+  // path (rogue AP, ARP spoofing) could feed the display arbitrary data.
   WiFiClientSecure client;
-  client.setInsecure();
+  client.setCACert(kRootCaPem);
 
   HTTPClient http;
   if (!http.begin(client, url)) {
@@ -335,7 +403,8 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
 
   PollingSocketSource source(http, *stream, millis() + kRequestTimeoutMs);
   BodyReader body(source, framing, http.getSize());
-  JsonDocument doc;
+  BudgetAllocator allocator(kJsonBudgetBytes);
+  JsonDocument doc(&allocator);
   const DeserializationError err =
       deserializeJson(doc, body, DeserializationOption::Filter(filter));
   // Read off the terminating chunk the parser stopped short of, so the socket
@@ -346,6 +415,8 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
   if (err) {
     if (body.framingError()) {
       Serial.println("adsb: malformed chunked body");
+    } else if (err == DeserializationError::NoMemory) {
+      Serial.println("adsb: response too large");
     } else if (body.bytesRead() == 0) {
       Serial.println("adsb: empty response");
     } else {
@@ -366,15 +437,19 @@ bool fetchUpdate(double center_lat, double center_lon, float fetch_radius_km) {
       if (n >= kMaxAircraft) {
         break;
       }
-      if (!plane["lat"].is<float>() || !plane["lon"].is<float>()) {
+      float lat = 0.0f;
+      float lon = 0.0f;
+      if (!plane["lat"].is<float>() || !plane["lon"].is<float>() ||
+          !readJsonFloat(plane, "lat", &lat) || !readJsonFloat(plane, "lon", &lon) ||
+          std::fabs(lat) > 90.0f || std::fabs(lon) > 180.0f) {
         continue;
       }
       if (isOnGround(plane) && !config::kAdsbShowGroundAircraft) {
         continue;
       }
 
-      parsed[n].lat = plane["lat"].as<float>();
-      parsed[n].lon = plane["lon"].as<float>();
+      parsed[n].lat = lat;
+      parsed[n].lon = lon;
       parsed[n].nose_deg = pickNoseHeading(plane);
       parsed[n].track_deg = pickTrackHeading(plane);
       parsed[n].gs_knots = pickGroundSpeed(plane);

@@ -16,7 +16,9 @@ constexpr char kPortalHostUrl[] = "plane-radar.local";
 /** Per-attempt STA connect wait (ms); retried kWifiConnectAttempts times. */
 constexpr unsigned long kWifiConnectAttemptMs = 15000;
 constexpr uint8_t kWifiConnectAttempts = 3;
-constexpr unsigned long kWifiPortalTimeoutSec = 0;  // 0 = no timeout while configuring
+/** Setup AP closes after this long without portal activity; the saved network
+ *  is then retried and the AP reopens if that fails (see portalUntilConnected). */
+constexpr unsigned long kWifiPortalTimeoutSec = 600;
 constexpr unsigned long kWifiConnectingFrameMs = 50;
 /** Wait after disconnect before reconnecting (avoids portal on brief drops). */
 constexpr unsigned long kWifiDownGraceMs = 4000;
@@ -100,6 +102,20 @@ constexpr unsigned long kRadarRedrawIntervalMs = 500;
 constexpr float kAdsbFetchRadiusScale = 1.0f;
 /** false = hide aircraft with alt_baro "ground"; true = show them too. */
 constexpr bool kAdsbShowGroundAircraft = false;
+
+// --- Display on/off schedule (set in the web portal) ---
+/** NTP servers for local time; the schedule is ignored until time has synced. */
+constexpr char kNtpServer1[] = "pool.ntp.org";
+constexpr char kNtpServer2[] = "time.google.com";
+/** Default POSIX TZ string (portal field "Time zone"). */
+constexpr char kDefaultTimezone[] = "UTC0";
+/** Default schedule window when first enabled (local time, minutes after midnight). */
+constexpr uint16_t kDefaultDisplayOffMin = 23 * 60;
+constexpr uint16_t kDefaultDisplayOnMin = 7 * 60;
+/** A touch or BOOT tap while the display is scheduled off wakes it this long (ms). */
+constexpr unsigned long kDisplayWakeMs = 60000;
+/** Backlight PWM level (0-255) while the display is on. */
+constexpr uint8_t kDisplayBrightness = 255;
 
 // --- UI colors (RGB565) — status screens ---
 constexpr uint16_t kColorBlack = 0x0000;

@@ -9,6 +9,8 @@
 #include "config.h"
 #include "hardware/display.h"
 #include "services/adsb_client.h"
+#include "services/display_schedule.h"
+#include "services/portal_security.h"
 #include "services/radar_location.h"
 #include "services/wifi_setup.h"
 #include "ui/radar_display.h"
@@ -51,12 +53,21 @@ void onRangeTap() {
 void handleBootButton() {
   bootButtonPollLongPress();
   if (bootButtonConsumeTap()) {
+    if (services::display_schedule::isOff()) {
+      services::display_schedule::wakeTemporarily();
+      return;
+    }
     onRangeTap();
   }
 }
 
 /** Act on a completed tap (finger lifted) at screen coordinate x, y. */
 void onTouchTap(int x, int y) {
+  // While the schedule has the display off, a tap only wakes it.
+  if (services::display_schedule::isOff()) {
+    services::display_schedule::wakeTemporarily();
+    return;
+  }
   if (!g_radar_visible) {
     return;
   }
@@ -74,6 +85,10 @@ void onTouchTap(int x, int y) {
     case ui::PanelButton::kRunways:
       ui::radar::toggleRunways();
       ui::radarDisplayDraw();
+      return;
+    case ui::PanelButton::kLoginInfo:
+      ui::sidePanelToggleLoginCard();
+      ui::sidePanelDraw(true);
       return;
     case ui::PanelButton::kNone:
       break;
@@ -121,7 +136,8 @@ void handleTouch() {
 // lock; the render loop reads a snapshot.
 void adsbFetchTask(void*) {
   for (;;) {
-    if (WiFi.status() == WL_CONNECTED && !wifiOtaInProgress()) {
+    if (WiFi.status() == WL_CONNECTED && !wifiOtaInProgress() &&
+        !services::display_schedule::isOff()) {
       services::adsb::fetchUpdate(services::location::lat(),
                                   services::location::lon(),
                                   ui::radar::fetchRadiusKm());
@@ -132,6 +148,12 @@ void adsbFetchTask(void*) {
 
 }  // namespace
 
+/** Keep a freshly flashed (OTA) image in "pending verify" instead of letting
+ *  the Arduino core accept it at boot: wifi_setup marks it valid once the web
+ *  portal is reachable again, and a crash or reset before that rolls back to
+ *  the previous image. */
+extern "C" bool verifyRollbackLater() { return true; }
+
 void setup() {
   Serial.begin(115200);
   delay(500);
@@ -140,12 +162,16 @@ void setup() {
   Serial.printf("PSRAM: %u bytes free\n", static_cast<unsigned>(ESP.getFreePsram()));
 
   bootButtonInit();
+  // Before Wi-Fi or the display start: a first-boot password is drawn from the
+  // hardware RNG with its standalone entropy source switched on.
+  services::portal_security::init();
   displayInit();
   if (wifiShowsSetupScreenOnBoot()) {
     statusScreenPortal();
   }
   services::location::init();
   ui::radar::rangeInit();
+  services::display_schedule::init();
   services::adsb::init();
 
   if (wifiSetupConnect()) {
@@ -161,6 +187,9 @@ void loop() {
   handleBootButton();
   handleTouch();
   wifiLoop();
+
+  // Scheduled display-off turns the backlight off; Wi-Fi upkeep below still runs.
+  const bool display_off = services::display_schedule::update();
 
   if (WiFi.status() != WL_CONNECTED) {
     if (g_radar_visible) {
@@ -183,7 +212,10 @@ void loop() {
     }
   } else {
     g_wifi_down_since = 0;
-    if (!g_radar_visible) {
+    if (display_off) {
+      // Skip drawing while dark; clearing the flag forces a full redraw on wake.
+      g_radar_visible = false;
+    } else if (!g_radar_visible) {
       showRadarIfConnected();
     } else if (millis() - g_last_redraw_ms >= config::kRadarRedrawIntervalMs) {
       // Redraw at 2 Hz with dead-reckoned positions; the ADS-B fetch runs on

@@ -3,7 +3,8 @@
 /** True when the next boot should show the setup screen first (after credential reset). */
 bool wifiShowsSetupScreenOnBoot();
 void wifiResetCredentialsAndReboot();
-/** Boot flow: connect with UI, open portal only if saved creds fail. */
+/** Boot flow: connect with UI; if saved creds fail, run the WPA2 setup portal
+ *  (retrying the saved network whenever it times out) until online. */
 bool wifiSetupConnect();
 /** Reconnect using saved creds; never opens the captive portal. */
 bool wifiReconnect();
